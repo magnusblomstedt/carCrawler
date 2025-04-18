@@ -1,0 +1,14 @@
+# Ignore log files
+*.log
+
+# Ignore CSV files
+*.csv
+
+# Ignore JSON files
+*.json
+
+# Ignore specific files
+influxdb_conf.py
+temp.py
+temp2.py
+webserver.py
