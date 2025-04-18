@@ -12,6 +12,8 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_conf import INFLUXDB_CONFIG
 
+#test
+
 """
 Influx local
 http://localhost:8086/
