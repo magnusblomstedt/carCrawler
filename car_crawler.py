@@ -8,9 +8,8 @@ import schedule
 import os
 import csv
 import logging
-from influxdb_client import InfluxDBClient, Point
-from influxdb_client.client.write_api import SYNCHRONOUS
-from influxdb_conf import INFLUXDB_CONFIG
+from supabase import create_client
+from supabase_conf import SUPABASE_CONFIG
 
 #test
 
@@ -45,14 +44,8 @@ logging.basicConfig(
     ]
 )
 
-# InfluxDB setup
-client = InfluxDBClient(
-    url=INFLUXDB_CONFIG["url"],
-    token=INFLUXDB_CONFIG["token"],
-    org=INFLUXDB_CONFIG["org"]
-)
-write_api = client.write_api(write_options=SYNCHRONOUS)
-bucket = INFLUXDB_CONFIG["bucket"]
+# Supabase setup
+supabase = create_client(SUPABASE_CONFIG["url"], SUPABASE_CONFIG["key"])
 
 # ---------- JSON extractor using balanced brackets ----------
 def extract_store_objects(script_content):
@@ -90,8 +83,18 @@ def clean_model_name(model_name):
     # Remove kWh details (e.g., "80,0 kWh", "95 kWh")
     cleaned = re.sub(r'\s+\d+(?:[,.]\d+)?\s*kWh\b', '', cleaned, flags=re.IGNORECASE)
     
-    # Remove trailing commas and whitespace
-    cleaned = re.sub(r',\s*$', '', cleaned.strip())
+    # Remove all commas and whitespace
+    cleaned = re.sub(r',\s*', ' ', cleaned.strip())
+    
+    return cleaned
+
+def clean_brand_name(brand_name):
+    """Clean up brand name by removing commas."""
+    if not brand_name:
+        return ""
+    
+    # Remove all commas and whitespace
+    cleaned = re.sub(r',\s*', ' ', brand_name.strip())
     
     return cleaned
 
@@ -117,6 +120,23 @@ def get_tesla_battery_capacity(model_name_short):
     cleaned_name = model_name_short.replace("Tesla ", "").strip()
     return tesla_capacities.get(cleaned_name)
 
+def extract_engine_power_from_model_name(model_name):
+    """Extract engine power (in hk) from model name if present."""
+    if not model_name:
+        return None
+    
+    # Match patterns like "(254hk)" or "254hk"
+    match = re.search(r'(?:\((\d+)hk\)|(\d+)hk)', model_name)
+    if match:
+        # Get the first non-None group (either from parentheses or standalone)
+        hk_value = next((g for g in match.groups() if g is not None), None)
+        if hk_value:
+            try:
+                return int(hk_value)
+            except (ValueError, TypeError):
+                return None
+    return None
+
 def extract_fields(store):
     data = {}
     for key, item in store.get('objectView', {}).get('storeObjects', {}).items():
@@ -129,7 +149,7 @@ def extract_fields(store):
         location_info = process_object.get("locationInfo", {}) or {}
         facility = location_info.get("facility", {}) or {}
         properties = process_object.get("properties", {}) or {}
-        fuels = base_obj.get("fuels", []) or []
+        fuels = properties.get("fuels", []) or []
         active_auction = item.get("activeAuction", {}) or {}
         winning_bid = item.get("winningBid", {}) or {}
         highest_bid = (active_auction.get("highestBid", {}) or {}).get("amount")
@@ -141,13 +161,26 @@ def extract_fields(store):
             match = re.search(r'-(\d+)$', auction_url)
             auction_id = match.group(1) if match else None
 
+        # Get model name first
+        model_name = base_obj.get("modelName", "") or ""
+
         # Get the first fuel code if available
         fuel_code = None
         if fuels and len(fuels) > 0:
             fuel_code = fuels[0].get("fuelCode")
+            # Get engine power HP from authority register information
+            authority_info = process_object.get("baseObject", {}).get("authorityRegisterInformation", {}) or {}
+            tech_spec = authority_info.get("generalTechSpecification", {}) or {}
+            tech_fuels = tech_spec.get("fuels", []) or []
+            if tech_fuels and len(tech_fuels) > 0:
+                engine_power_hp = tech_fuels[0].get("enginePowerHp")
+                engine_power = tech_fuels[0].get("enginePower")
+            else:
+                # Fallback to extracting from model name
+                engine_power_hp = extract_engine_power_from_model_name(model_name)
+                engine_power = None
 
         # Extract battery capacity from modelName
-        model_name = base_obj.get("modelName", "") or ""
         battery_capacity = None
         if model_name:
             # Match patterns like:
@@ -166,6 +199,8 @@ def extract_fields(store):
 
         # Get brand
         brand = properties.get("brand") or None
+        if brand:
+            brand = clean_brand_name(brand)
 
         # Create cleaned model name with brand prefix
         model_name_short = clean_model_name(model_name)
@@ -184,23 +219,14 @@ def extract_fields(store):
         except (ValueError, TypeError):
             sold_for = None
 
-        # Calculate cost per kWh if both soldFor and batteryCapacity are available
-        cost_per_kwh = None
-        if sold_for is not None and battery_capacity is not None and battery_capacity > 0:
-            try:
-                cost_per_kwh = sold_for / battery_capacity
-                logging.info(f"✅ Calculated cost per kWh: {cost_per_kwh:.2f} SEK/kWh")
-            except (ValueError, TypeError, ZeroDivisionError):
-                logging.warning("⚠️ Failed to calculate cost per kWh")
-
         # Create view fields based on conditions
-        model_name_view = model_name_with_brand if sold_for and sold_for > 0 and battery_capacity and battery_capacity > 0 else None
-        model_name_electric_view = model_name_with_brand if fuel_code == "Electric" and sold_for and sold_for > 0 and battery_capacity and battery_capacity > 0 else None
-        model_name_fossil_view = model_name_with_brand if fuel_code != "Electric" and sold_for and sold_for > 0 and battery_capacity and battery_capacity > 0 else None
+        model_name_search = model_name_with_brand if sold_for and sold_for > 0 else None
+        model_name_electric_search = model_name_with_brand if fuel_code == "Electric" and sold_for and sold_for > 0 else None
+        model_name_fossil_search = model_name_with_brand if fuel_code != "Electric" and sold_for and sold_for > 0 else None
 
         # Create electric/fossil specific brands
-        brand_electric = brand if fuel_code == "Electric" else None
-        brand_fossil = brand if fuel_code != "Electric" else None
+        brand_electric_search = brand if fuel_code == "Electric" and sold_for and sold_for > 0 else None
+        brand_fossil_search = brand if fuel_code != "Electric" and sold_for and sold_for > 0 else None
 
         # Safely get all fields with defaults
         data = {
@@ -222,21 +248,25 @@ def extract_fields(store):
             "odometerReading": properties.get("odometerReading") or None,
             "body": properties.get("body") or None,
             "brand": brand,
-            "brandElectric": brand_electric,
-            "brandFossil": brand_fossil,
+            "brandElectricSearch": brand_electric_search,
+            "brandFossilSearch": brand_fossil_search,
             "familyName": properties.get("familyName") or None,
             "registrationPlate": base_obj.get("registrationPlate") or None,
             "modelName": model_name,
-            "modelNameShort": model_name_with_brand,
-            "modelNameView": model_name_view,
-            "modelNameElectricView": model_name_electric_view,
-            "modelNameFossilView": model_name_fossil_view,
+            "modelNamePresentation": model_name_with_brand,
+            "modelNameSearch": model_name_search,
+            "modelNameElectricSearch": model_name_electric_search,
+            "modelNameFossilSearch": model_name_fossil_search,
             "year": base_obj.get("year") or None,
             "facilityPostCode": facility.get("postCode") or None,
             "facilityCity": facility.get("city") or None,
             "fuelCode": fuel_code,
             "batteryCapacity": battery_capacity,
-            "costPerKwh": cost_per_kwh,
+            "rangeCityWltpDrive": fuels[0].get("rangeCityWltpDrive") if fuels else None,
+            "rangeWltpDrive": fuels[0].get("rangeWltpDrive") if fuels else None,
+            "enginePowerHp": engine_power_hp,
+            "enginePower": engine_power,
+            "gearbox": properties.get("gearbox") or None,
         }
 
         if auction_id:
@@ -246,71 +276,98 @@ def extract_fields(store):
         break
     return data
 
-def write_to_influx(data):
+def write_to_supabase(data):
     if not data or not data.get("auctionId"):
+        logging.warning("⚠️ No data or auction ID provided to write_to_supabase")
         return
 
-    # Convert numeric fields to float, handling None values
-    def to_float(value):
-        try:
-            return float(value) if value is not None else None
-        except (ValueError, TypeError):
-            return None
+    logging.info(f"📝 Preparing to write data for auction ID: {data['auctionId']}")
 
-    point = Point("car_auction") \
-        .tag("auctionId", data["auctionId"]) \
-        .tag("brand", data.get("brand")) \
-        .tag("brandElectric", data.get("brandElectric")) \
-        .tag("brandFossil", data.get("brandFossil")) \
-        .tag("modelName", data.get("modelName")) \
-        .tag("modelNameShort", data.get("modelNameShort")) \
-        .tag("modelNameView", data.get("modelNameView")) \
-        .tag("modelNameElectricView", data.get("modelNameElectricView")) \
-        .tag("modelNameFossilView", data.get("modelNameFossilView")) \
-        .tag("registrationPlate", data.get("registrationPlate")) \
-        .tag("year", str(data.get("year"))) \
-        .tag("fuelCode", data.get("fuelCode")) \
-        .tag("sellMethod", str(data.get("sellMethod"))) \
-        .tag("slug", str(data.get("slug"))) \
-        .tag("auctionUrl", str(data.get("auctionUrl"))) \
-        .field("soldFor", to_float(data.get("soldFor"))) \
-        .field("buyNowAmount", to_float(data.get("buyNowAmount"))) \
-        .field("preliminaryPrice", to_float(data.get("preliminaryPrice"))) \
-        .field("winningBid", to_float(data.get("winningBid"))) \
-        .field("highestBid", to_float(data.get("highestBid"))) \
-        .field("odometerReading", to_float(data.get("odometerReading"))) \
-        .field("batteryCapacity", to_float(data.get("batteryCapacity"))) \
-        .field("costPerKwh", to_float(data.get("costPerKwh"))) \
-        .field("buyNowAvailable", bool(data.get("buyNowAvailable"))) \
-        .field("isSoldByBuyNow", bool(data.get("isSoldByBuyNow"))) \
-        .field("reservationPriceReached", bool(data.get("reservationPriceReached"))) \
-        .field("closedAt", data.get("closedAt")) \
-        .field("publishedAt", data.get("publishedAt")) \
-        .time(datetime.fromisoformat(data.get("closedAt", "").replace("Z", "+00:00")))
+    try:
+        # Convert datetime strings to proper format if they're not already
+        for field in ['closedAt', 'publishedAt']:
+            if isinstance(data.get(field), str):
+                # The date is already a string, just replace Z with +00:00 for proper timezone
+                data[field] = data[field].replace('Z', '+00:00') if data.get(field) else None
+            elif data.get(field):
+                # If it's a datetime object, convert to ISO format string
+                data[field] = data[field].isoformat()
 
-    # Check if record exists
-    query = f'''
-    from(bucket: "{bucket}")
-        |> range(start: -30d)
-        |> filter(fn: (r) => r["_measurement"] == "car_auction")
-        |> filter(fn: (r) => r["auctionId"] == "{data['auctionId']}")
-    '''
-    result = client.query_api().query(query=query, org=INFLUXDB_CONFIG["org"])
-    
-    if result:
-        logging.info(f"🔄 Updating existing record for auction {data['auctionId']}")
-    else:
-        logging.info(f"📝 Creating new record for auction {data['auctionId']}")
+        # Prepare the data for Supabase
+        supabase_data = {
+            'auction_id': data['auctionId'],
+            'closed_at': data.get('closedAt'),
+            'published_at': data.get('publishedAt'),
+            'sold_for': data.get('soldFor'),
+            'sell_method': data.get('sellMethod'),
+            'slug': data.get('slug'),
+            'auction_url': data.get('auctionUrl'),
+            'buy_now_amount': data.get('buyNowAmount'),
+            'buy_now_available': data.get('buyNowAvailable'),
+            'preliminary_price': data.get('preliminaryPrice'),
+            'is_sold_by_buy_now': data.get('isSoldByBuyNow'),
+            'winning_bid': data.get('winningBid'),
+            'reservation_price_reached': data.get('reservationPriceReached'),
+            'highest_bid': data.get('highestBid'),
+            'electric_type': data.get('electricType'),
+            'odometer_reading': data.get('odometerReading'),
+            'body': data.get('body'),
+            'brand': data.get('brand'),
+            'brand_electric_search': data.get('brandElectricSearch'),
+            'brand_fossil_search': data.get('brandFossilSearch'),
+            'family_name': data.get('familyName'),
+            'registration_plate': data.get('registrationPlate'),
+            'model_name': data.get('modelName'),
+            'model_name_presentation': data.get('modelNamePresentation'),
+            'model_name_search': data.get('modelNameSearch'),
+            'model_name_electric_search': data.get('modelNameElectricSearch'),
+            'model_name_fossil_search': data.get('modelNameFossilSearch'),
+            'year': data.get('year'),
+            'facility_post_code': data.get('facilityPostCode'),
+            'facility_city': data.get('facilityCity'),
+            'fuel_code': data.get('fuelCode'),
+            'battery_capacity': data.get('batteryCapacity'),
+            'range_city_wltp_drive': data.get('rangeCityWltpDrive'),
+            'range_wltp_drive': data.get('rangeWltpDrive'),
+            'engine_power_hp': data.get('enginePowerHp'),
+            'engine_power': data.get('enginePower'),
+            'gearbox': data.get('gearbox'),
+            'main_image_url': data.get('mainImageUrl'),
+        }
 
-    # Write the point - InfluxDB will automatically handle the update
-    write_api.write(bucket=bucket, org=INFLUXDB_CONFIG["org"], record=point)
+        logging.info(f"🔍 Checking for existing record with auction_id: {data['auctionId']}")
 
-# Crawl KVD auctions and store data in InfluxDB
+        # Check if record exists
+        existing_record = supabase.table('car_auctions') \
+            .select("*") \
+            .eq('auction_id', data['auctionId']) \
+            .execute()
+
+        if existing_record.data:
+            # Update existing record
+            supabase.table('car_auctions') \
+                .update(supabase_data) \
+                .eq('auction_id', data['auctionId']) \
+                .execute()
+            logging.info(f"🔄 Updated record for auction {data['auctionId']}")
+        else:
+            # Insert new record
+            supabase.table('car_auctions') \
+                .insert(supabase_data) \
+                .execute()
+            logging.info(f"📝 Created new record for auction {data['auctionId']}")
+
+    except Exception as e:
+        logging.error(f"❌ Error writing to Supabase: {str(e)}")
+        logging.error(f"❌ Error details: {type(e).__name__}")
+        import traceback
+        logging.error(f"❌ Full traceback: {traceback.format_exc()}")
+
+# Crawl KVD auctions and store data in Supabase
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
     if limit:
         logging.info(f"⚠️ Limiting to first {limit} URLs")
-        # Create a list to store records for CSV output
         records = []
 
     url = "https://www.kvd.se/stangda-auktioner"
@@ -327,18 +384,21 @@ def crawl_kvd(limit=None):
     for detail_url in detail_urls:
         try:
             logging.info(f"🔍 Fetching {detail_url}")
-            # Set allow_redirects to False to detect redirects
             response = requests.get(detail_url, allow_redirects=False)
             
-            # Check if we got a redirect response
             if response.status_code in (301, 302, 303, 307, 308):
                 logging.warning(f"⚠️ Skipping {detail_url} - URL redirects to {response.headers.get('Location', 'unknown')}")
                 continue
                 
-            # If not a redirect, proceed with the request
             page = requests.get(detail_url)
             detail_soup = BeautifulSoup(page.text, 'html.parser')
             scripts = detail_soup.find_all('script')
+
+            # Extract main image URL from meta tag
+            main_image_url = None
+            meta_image = detail_soup.find('meta', property='og:image')
+            if meta_image and meta_image.get('content'):
+                main_image_url = meta_image['content']
 
             store_data = None
             for script in scripts:
@@ -349,7 +409,8 @@ def crawl_kvd(limit=None):
 
             if store_data:
                 record = extract_fields(store_data)
-                write_to_influx(record)
+                record['mainImageUrl'] = main_image_url
+                write_to_supabase(record)
                 if limit:
                     records.append(record)
             else:
@@ -362,7 +423,6 @@ def crawl_kvd(limit=None):
             logging.error(f"❌ Unexpected error for {detail_url}: {str(e)}")
             continue
 
-    # If running with limit, write to CSV
     if limit and records:
         csv_filename = os.path.join(SCRIPT_DIR, f'cars_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
         logging.info(f"📝 Writing {len(records)} records to {csv_filename}")
@@ -378,7 +438,7 @@ schedule.every().day.at("05:00").do(crawl_kvd)
 
 if __name__ == '__main__':
     # Set to None for full crawl, or a number to limit URLs
-    limit = None  # Set to None for full crawl
+    limit = 10000  # Set to None for full crawl
     
     # Only run immediately if we're not using the scheduler
     if limit is not None:
