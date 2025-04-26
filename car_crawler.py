@@ -204,7 +204,7 @@ def extract_fields(store):
 
         # Create cleaned model name with brand prefix
         model_name_short = clean_model_name(model_name)
-        model_name_with_brand = f"{brand} {model_name_short}" if brand and model_name_short else model_name_short
+        model_name_with_brand = model_name_short
 
         # If no battery capacity found and it's a Tesla, try to get it from the model name
         if battery_capacity is None and brand == "Tesla" and model_name_with_brand:
@@ -254,9 +254,6 @@ def extract_fields(store):
             "registrationPlate": base_obj.get("registrationPlate") or None,
             "modelName": model_name,
             "modelNamePresentation": model_name_with_brand,
-            "modelNameSearch": model_name_search,
-            "modelNameElectricSearch": model_name_electric_search,
-            "modelNameFossilSearch": model_name_fossil_search,
             "year": base_obj.get("year") or None,
             "facilityPostCode": facility.get("postCode") or None,
             "facilityCity": facility.get("city") or None,
@@ -267,6 +264,7 @@ def extract_fields(store):
             "enginePowerHp": engine_power_hp,
             "enginePower": engine_power,
             "gearbox": properties.get("gearbox") or None,
+            "objectViewJson": store.get('objectView', {})
         }
 
         if auction_id:
@@ -319,9 +317,6 @@ def write_to_supabase(data):
             'registration_plate': data.get('registrationPlate'),
             'model_name': data.get('modelName'),
             'model_name_presentation': data.get('modelNamePresentation'),
-            'model_name_search': data.get('modelNameSearch'),
-            'model_name_electric_search': data.get('modelNameElectricSearch'),
-            'model_name_fossil_search': data.get('modelNameFossilSearch'),
             'year': data.get('year'),
             'facility_post_code': data.get('facilityPostCode'),
             'facility_city': data.get('facilityCity'),
@@ -333,6 +328,7 @@ def write_to_supabase(data):
             'engine_power': data.get('enginePower'),
             'gearbox': data.get('gearbox'),
             'main_image_url': data.get('mainImageUrl'),
+            'object_view_json': data.get('objectViewJson')
         }
 
         logging.info(f"🔍 Checking for existing record with auction_id: {data['auctionId']}")
@@ -396,9 +392,33 @@ def crawl_kvd(limit=None):
 
             # Extract main image URL from meta tag
             main_image_url = None
+            # Try multiple ways to find the image URL
             meta_image = detail_soup.find('meta', property='og:image')
             if meta_image and meta_image.get('content'):
                 main_image_url = meta_image['content']
+            else:
+                # Try with React Helmet attribute
+                meta_image = detail_soup.find('meta', attrs={'property': 'og:image', 'data-react-helmet': 'true'})
+                if meta_image and meta_image.get('content'):
+                    main_image_url = meta_image['content']
+                else:
+                    # Try alternative meta tag formats
+                    meta_image = detail_soup.find('meta', attrs={'name': 'og:image'})
+                    if meta_image and meta_image.get('content'):
+                        main_image_url = meta_image['content']
+                    else:
+                        # Try to find any meta tag with image in content
+                        meta_images = detail_soup.find_all('meta')
+                        for meta in meta_images:
+                            content = meta.get('content', '')
+                            if 'imgix.net' in content:
+                                main_image_url = content
+                                break
+
+            if main_image_url:
+                logging.info(f"✅ Found image URL: {main_image_url}")
+            else:
+                logging.warning(f"⚠️ No image URL found in meta tags for {detail_url}")
 
             store_data = None
             for script in scripts:
@@ -438,7 +458,7 @@ schedule.every().day.at("05:00").do(crawl_kvd)
 
 if __name__ == '__main__':
     # Set to None for full crawl, or a number to limit URLs
-    limit = 10000  # Set to None for full crawl
+    limit = None  # Set to None for full crawl
     
     # Only run immediately if we're not using the scheduler
     if limit is not None:
