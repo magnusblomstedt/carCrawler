@@ -248,8 +248,6 @@ def extract_fields(store):
             "odometerReading": properties.get("odometerReading") or None,
             "body": properties.get("body") or None,
             "brand": brand,
-            "brandElectricSearch": brand_electric_search,
-            "brandFossilSearch": brand_fossil_search,
             "familyName": properties.get("familyName") or None,
             "registrationPlate": base_obj.get("registrationPlate") or None,
             "modelName": model_name,
@@ -311,8 +309,6 @@ def write_to_supabase(data):
             'odometer_reading': data.get('odometerReading'),
             'body': data.get('body'),
             'brand': data.get('brand'),
-            'brand_electric_search': data.get('brandElectricSearch'),
-            'brand_fossil_search': data.get('brandFossilSearch'),
             'family_name': data.get('familyName'),
             'registration_plate': data.get('registrationPlate'),
             'model_name': data.get('modelName'),
@@ -390,36 +386,10 @@ def crawl_kvd(limit=None):
             detail_soup = BeautifulSoup(page.text, 'html.parser')
             scripts = detail_soup.find_all('script')
 
-            # Extract main image URL from meta tag
+            # Try to get image URL from store data first
             main_image_url = None
-            # Try multiple ways to find the image URL
-            meta_image = detail_soup.find('meta', property='og:image')
-            if meta_image and meta_image.get('content'):
-                main_image_url = meta_image['content']
-            else:
-                # Try with React Helmet attribute
-                meta_image = detail_soup.find('meta', attrs={'property': 'og:image', 'data-react-helmet': 'true'})
-                if meta_image and meta_image.get('content'):
-                    main_image_url = meta_image['content']
-                else:
-                    # Try alternative meta tag formats
-                    meta_image = detail_soup.find('meta', attrs={'name': 'og:image'})
-                    if meta_image and meta_image.get('content'):
-                        main_image_url = meta_image['content']
-                    else:
-                        # Try to find any meta tag with image in content
-                        meta_images = detail_soup.find_all('meta')
-                        for meta in meta_images:
-                            content = meta.get('content', '')
-                            if 'imgix.net' in content:
-                                main_image_url = content
-                                break
-
-            if main_image_url:
-                logging.info(f"✅ Found image URL: {main_image_url}")
-            else:
-                logging.warning(f"⚠️ No image URL found in meta tags for {detail_url}")
-
+            image_source = None
+            
             store_data = None
             for script in scripts:
                 if script.string and "storeObjects" in script.string:
@@ -428,8 +398,52 @@ def crawl_kvd(limit=None):
                         break
 
             if store_data:
+                # Try to get image from objectView.storeObjects.{auctionId}.previewImage
+                for key, item in store_data.get('objectView', {}).get('storeObjects', {}).items():
+                    if item and item.get('previewImage'):
+                        main_image_url = item['previewImage']
+                        image_source = 'store_data_preview_image'
+                        logging.info(f"✅ Found image URL in store data previewImage: {main_image_url}")
+                        break
+
+            # If no image found in store data, try meta tags
+            if not main_image_url:
+                # Try multiple ways to find the image URL in meta tags
+                meta_image = detail_soup.find('meta', property='og:image')
+                if meta_image and meta_image.get('content'):
+                    main_image_url = meta_image['content']
+                    image_source = 'meta_og_image'
+                else:
+                    # Try with React Helmet attribute
+                    meta_image = detail_soup.find('meta', attrs={'property': 'og:image', 'data-react-helmet': 'true'})
+                    if meta_image and meta_image.get('content'):
+                        main_image_url = meta_image['content']
+                        image_source = 'meta_react_helmet'
+                    else:
+                        # Try alternative meta tag formats
+                        meta_image = detail_soup.find('meta', attrs={'name': 'og:image'})
+                        if meta_image and meta_image.get('content'):
+                            main_image_url = meta_image['content']
+                            image_source = 'meta_name_og_image'
+                        else:
+                            # Try to find any meta tag with image in content
+                            meta_images = detail_soup.find_all('meta')
+                            for meta in meta_images:
+                                content = meta.get('content', '')
+                                if 'imgix.net' in content:
+                                    main_image_url = content
+                                    image_source = 'meta_imgix_net'
+                                    break
+
+            if main_image_url:
+                logging.info(f"✅ Found image URL from {image_source}: {main_image_url}")
+            else:
+                logging.warning(f"⚠️ No image URL found for {detail_url}")
+
+            if store_data:
                 record = extract_fields(store_data)
                 record['mainImageUrl'] = main_image_url
+                record['imageSource'] = image_source  # Add the source to the record
                 write_to_supabase(record)
                 if limit:
                     records.append(record)
