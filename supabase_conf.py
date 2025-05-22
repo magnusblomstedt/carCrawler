@@ -1,4 +1,9 @@
-SUPABASE_CONFIG = {
-    "url": "https://bdemudgifpofyiebejzm.supabase.co",
-    "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkZW11ZGdpZnBvZnlpZWJlanptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ5ODc3MjYsImV4cCI6MjA2MDU2MzcyNn0.5PIjB5DLnJBcrv7COwvzAqTcqYusAgMB_rRu8YqbPlA",
+DB_CONFIG = {
+    "host": "aws-0-eu-north-1.pooler.supabase.com",
+    "port": 5432,
+    "database": "postgres",
+    "user": "postgres.bdemudgifpofyiebejzm",
+    "password": "13-Rajjan",
+    "sslmode": "require",
+    "gssencmode": "disable"
 }

@@ -8,8 +8,9 @@ import schedule
 import os
 import csv
 import logging
-from supabase import create_client
-from supabase_conf import SUPABASE_CONFIG
+import psycopg2
+from psycopg2.extras import DictCursor
+from supabase_conf import DB_CONFIG
 
 #test
 
@@ -44,8 +45,9 @@ logging.basicConfig(
     ]
 )
 
-# Supabase setup
-supabase = create_client(SUPABASE_CONFIG["url"], SUPABASE_CONFIG["key"])
+# Database setup
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG)
 
 # ---------- JSON extractor using balanced brackets ----------
 def extract_store_objects(script_content):
@@ -166,6 +168,8 @@ def extract_fields(store):
 
         # Get the first fuel code if available
         fuel_code = None
+        engine_power_hp = None
+        engine_power = None
         if fuels and len(fuels) > 0:
             fuel_code = fuels[0].get("fuelCode")
             # Get engine power HP from authority register information
@@ -246,7 +250,7 @@ def extract_fields(store):
             "highestBid": highest_bid or None,
             "electricType": properties.get("electricType") or None,
             "odometerReading": properties.get("odometerReading") or None,
-            "body": properties.get("body") or None,
+            "body": base_obj.get("body") or None,
             "brand": brand,
             "familyName": properties.get("familyName") or None,
             "registrationPlate": base_obj.get("registrationPlate") or None,
@@ -262,7 +266,8 @@ def extract_fields(store):
             "enginePowerHp": engine_power_hp,
             "enginePower": engine_power,
             "gearbox": properties.get("gearbox") or None,
-            "objectViewJson": store.get('objectView', {})
+            "objectViewJson": store.get('objectView', {}),
+            "base_object_type": base_obj.get("baseObjectType") or None
         }
 
         if auction_id:
@@ -289,8 +294,13 @@ def write_to_supabase(data):
                 # If it's a datetime object, convert to ISO format string
                 data[field] = data[field].isoformat()
 
-        # Prepare the data for Supabase
-        supabase_data = {
+        # Convert objectViewJson to JSON string if it exists
+        object_view_json = data.get('objectViewJson')
+        if object_view_json:
+            object_view_json = json.dumps(object_view_json)
+
+        # Prepare the data for database
+        db_data = {
             'auction_id': data['auctionId'],
             'closed_at': data.get('closedAt'),
             'published_at': data.get('publishedAt'),
@@ -324,33 +334,35 @@ def write_to_supabase(data):
             'engine_power': data.get('enginePower'),
             'gearbox': data.get('gearbox'),
             'main_image_url': data.get('mainImageUrl'),
-            'object_view_json': data.get('objectViewJson')
+            'object_view_json': object_view_json,
+            'base_object_type': data.get('base_object_type')
         }
 
-        logging.info(f"🔍 Checking for existing record with auction_id: {data['auctionId']}")
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=DictCursor) as cur:
+                # Check if record exists
+                cur.execute("SELECT * FROM car_auctions WHERE auction_id = %s", (data['auctionId'],))
+                existing_record = cur.fetchone()
 
-        # Check if record exists
-        existing_record = supabase.table('car_auctions') \
-            .select("*") \
-            .eq('auction_id', data['auctionId']) \
-            .execute()
+                if existing_record:
+                    # Update existing record
+                    set_clause = ", ".join([f"{k} = %s" for k in db_data.keys()])
+                    values = list(db_data.values())
+                    query = f"UPDATE car_auctions SET {set_clause} WHERE auction_id = %s"
+                    cur.execute(query, values + [data['auctionId']])
+                    logging.info(f"🔄 Updated record for auction {data['auctionId']}")
+                else:
+                    # Insert new record
+                    columns = ", ".join(db_data.keys())
+                    placeholders = ", ".join(["%s"] * len(db_data))
+                    query = f"INSERT INTO car_auctions ({columns}) VALUES ({placeholders})"
+                    cur.execute(query, list(db_data.values()))
+                    logging.info(f"📝 Created new record for auction {data['auctionId']}")
 
-        if existing_record.data:
-            # Update existing record
-            supabase.table('car_auctions') \
-                .update(supabase_data) \
-                .eq('auction_id', data['auctionId']) \
-                .execute()
-            logging.info(f"🔄 Updated record for auction {data['auctionId']}")
-        else:
-            # Insert new record
-            supabase.table('car_auctions') \
-                .insert(supabase_data) \
-                .execute()
-            logging.info(f"📝 Created new record for auction {data['auctionId']}")
+                conn.commit()
 
     except Exception as e:
-        logging.error(f"❌ Error writing to Supabase: {str(e)}")
+        logging.error(f"❌ Error writing to database: {str(e)}")
         logging.error(f"❌ Error details: {type(e).__name__}")
         import traceback
         logging.error(f"❌ Full traceback: {traceback.format_exc()}")
@@ -472,7 +484,7 @@ schedule.every().day.at("05:00").do(crawl_kvd)
 
 if __name__ == '__main__':
     # Set to None for full crawl, or a number to limit URLs
-    limit = None  # Set to None for full crawl
+    limit = 2  # Set to None for full crawl
     
     # Only run immediately if we're not using the scheduler
     if limit is not None:
