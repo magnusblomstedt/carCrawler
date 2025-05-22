@@ -484,7 +484,7 @@ schedule.every().day.at("05:00").do(crawl_kvd)
 
 if __name__ == '__main__':
     # Set to None for full crawl, or a number to limit URLs
-    limit = 2  # Set to None for full crawl
+    limit = None  # Set to None for full crawl
     
     # Only run immediately if we're not using the scheduler
     if limit is not None:
