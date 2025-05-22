@@ -36,7 +36,91 @@ def get_db_connection():
         ssl_context=True
     )
 
-# ... [keep all the helper functions: extract_store_objects, clean_model_name, etc.] ...
+def extract_store_objects(script_content):
+    """Extract store objects from script content."""
+    try:
+        # Find the storeObjects assignment
+        match = re.search(r'window\.storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        if match:
+            store_objects_str = match.group(1)
+            # Clean up the string to make it valid JSON
+            store_objects_str = re.sub(r'undefined', 'null', store_objects_str)
+            store_objects_str = re.sub(r'new Date\((.*?)\)', r'"\1"', store_objects_str)
+            return json.loads(store_objects_str)
+    except Exception as e:
+        logging.error(f"❌ Error extracting store objects: {str(e)}")
+    return None
+
+def clean_model_name(model_name):
+    """Clean and standardize model name."""
+    if not model_name:
+        return None
+    # Remove common suffixes and clean up
+    model_name = re.sub(r'\s*\(.*?\)', '', model_name)  # Remove anything in parentheses
+    model_name = re.sub(r'\s*[A-Za-z]+\s*$', '', model_name)  # Remove trailing words
+    return model_name.strip()
+
+def extract_fields(store_data):
+    """Extract relevant fields from store data."""
+    try:
+        # Get the first auction object
+        auction = next(iter(store_data.get('objectView', {}).get('storeObjects', {}).values()))
+        if not auction:
+            return None
+
+        # Extract basic fields
+        record = {
+            'auctionId': auction.get('id'),
+            'closedAt': auction.get('closedAt'),
+            'publishedAt': auction.get('publishedAt'),
+            'soldFor': auction.get('soldFor'),
+            'sellMethod': auction.get('sellMethod'),
+            'slug': auction.get('slug'),
+            'auctionUrl': f"https://www.kvd.se/auktioner/{auction.get('slug')}",
+            'buyNowAmount': auction.get('buyNowAmount'),
+            'buyNowAvailable': auction.get('buyNowAvailable'),
+            'preliminaryPrice': auction.get('preliminaryPrice'),
+            'isSoldByBuyNow': auction.get('isSoldByBuyNow'),
+            'winningBid': auction.get('winningBid'),
+            'reservationPriceReached': auction.get('reservationPriceReached'),
+            'highestBid': auction.get('highestBid'),
+        }
+
+        # Extract object data
+        object_data = auction.get('object', {})
+        if object_data:
+            record.update({
+                'electricType': object_data.get('electricType'),
+                'odometerReading': object_data.get('odometerReading'),
+                'body': object_data.get('body'),
+                'brand': object_data.get('brand'),
+                'familyName': object_data.get('familyName'),
+                'registrationPlate': object_data.get('registrationPlate'),
+                'modelName': object_data.get('modelName'),
+                'modelNamePresentation': object_data.get('modelNamePresentation'),
+                'year': object_data.get('year'),
+                'facilityPostCode': object_data.get('facilityPostCode'),
+                'facilityCity': object_data.get('facilityCity'),
+                'fuelCode': object_data.get('fuelCode'),
+                'batteryCapacity': object_data.get('batteryCapacity'),
+                'rangeCityWltpDrive': object_data.get('rangeCityWltpDrive'),
+                'rangeWltpDrive': object_data.get('rangeWltpDrive'),
+                'enginePowerHp': object_data.get('enginePowerHp'),
+                'enginePower': object_data.get('enginePower'),
+                'gearbox': object_data.get('gearbox'),
+            })
+
+        # Clean up model name
+        if record.get('modelName'):
+            record['modelName'] = clean_model_name(record['modelName'])
+
+        # Store the full object view JSON for reference
+        record['objectViewJson'] = store_data
+
+        return record
+    except Exception as e:
+        logging.error(f"❌ Error extracting fields: {str(e)}")
+        return None
 
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
