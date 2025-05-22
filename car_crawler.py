@@ -7,8 +7,7 @@ from datetime import datetime
 import os
 import csv
 import logging
-import psycopg2
-from psycopg2.extras import DictCursor
+import pg8000
 from supabase_conf import DB_CONFIG
 
 # Get the directory where this script is located
@@ -25,7 +24,14 @@ logging.basicConfig(
 
 # Database setup
 def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
+    return pg8000.connect(
+        user=DB_CONFIG['user'],
+        password=DB_CONFIG['password'],
+        host=DB_CONFIG['host'],
+        port=DB_CONFIG['port'],
+        database=DB_CONFIG['database'],
+        ssl_context=True
+    )
 
 # ... [keep all the helper functions: extract_store_objects, clean_model_name, etc.] ...
 
@@ -156,3 +162,93 @@ def main(request):
     except Exception as e:
         logging.error(f"❌ Error in main function: {str(e)}")
         return {"error": str(e)}, 500 
+
+def write_to_supabase(data):
+    if not data or not data.get("auctionId"):
+        logging.warning("⚠️ No data or auction ID provided to write_to_supabase")
+        return
+
+    logging.info(f"📝 Preparing to write data for auction ID: {data['auctionId']}")
+
+    try:
+        # Convert datetime strings to proper format if they're not already
+        for field in ['closedAt', 'publishedAt']:
+            if isinstance(data.get(field), str):
+                # The date is already a string, just replace Z with +00:00 for proper timezone
+                data[field] = data[field].replace('Z', '+00:00') if data.get(field) else None
+            elif data.get(field):
+                # If it's a datetime object, convert to ISO format string
+                data[field] = data[field].isoformat()
+
+        # Convert objectViewJson to JSON string if it exists
+        object_view_json = data.get('objectViewJson')
+        if object_view_json:
+            object_view_json = json.dumps(object_view_json)
+
+        # Prepare the data for database
+        db_data = {
+            'auction_id': data['auctionId'],
+            'closed_at': data.get('closedAt'),
+            'published_at': data.get('publishedAt'),
+            'sold_for': data.get('soldFor'),
+            'sell_method': data.get('sellMethod'),
+            'slug': data.get('slug'),
+            'auction_url': data.get('auctionUrl'),
+            'buy_now_amount': data.get('buyNowAmount'),
+            'buy_now_available': data.get('buyNowAvailable'),
+            'preliminary_price': data.get('preliminaryPrice'),
+            'is_sold_by_buy_now': data.get('isSoldByBuyNow'),
+            'winning_bid': data.get('winningBid'),
+            'reservation_price_reached': data.get('reservationPriceReached'),
+            'highest_bid': data.get('highestBid'),
+            'electric_type': data.get('electricType'),
+            'odometer_reading': data.get('odometerReading'),
+            'body': data.get('body'),
+            'brand': data.get('brand'),
+            'family_name': data.get('familyName'),
+            'registration_plate': data.get('registrationPlate'),
+            'model_name': data.get('modelName'),
+            'model_name_presentation': data.get('modelNamePresentation'),
+            'year': data.get('year'),
+            'facility_post_code': data.get('facilityPostCode'),
+            'facility_city': data.get('facilityCity'),
+            'fuel_code': data.get('fuelCode'),
+            'battery_capacity': data.get('batteryCapacity'),
+            'range_city_wltp_drive': data.get('rangeCityWltpDrive'),
+            'range_wltp_drive': data.get('rangeWltpDrive'),
+            'engine_power_hp': data.get('enginePowerHp'),
+            'engine_power': data.get('enginePower'),
+            'gearbox': data.get('gearbox'),
+            'main_image_url': data.get('mainImageUrl'),
+            'object_view_json': object_view_json,
+            'base_object_type': data.get('base_object_type')
+        }
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Check if record exists
+                cur.execute("SELECT * FROM car_auctions WHERE auction_id = %s", (data['auctionId'],))
+                existing_record = cur.fetchone()
+
+                if existing_record:
+                    # Update existing record
+                    set_clause = ", ".join([f"{k} = %s" for k in db_data.keys()])
+                    values = list(db_data.values())
+                    query = f"UPDATE car_auctions SET {set_clause} WHERE auction_id = %s"
+                    cur.execute(query, values + [data['auctionId']])
+                    logging.info(f"🔄 Updated record for auction {data['auctionId']}")
+                else:
+                    # Insert new record
+                    columns = ", ".join(db_data.keys())
+                    placeholders = ", ".join(["%s"] * len(db_data))
+                    query = f"INSERT INTO car_auctions ({columns}) VALUES ({placeholders})"
+                    cur.execute(query, list(db_data.values()))
+                    logging.info(f"📝 Created new record for auction {data['auctionId']}")
+
+                conn.commit()
+
+    except Exception as e:
+        logging.error(f"❌ Error writing to database: {str(e)}")
+        logging.error(f"❌ Error details: {type(e).__name__}")
+        import traceback
+        logging.error(f"❌ Full traceback: {traceback.format_exc()}") 
