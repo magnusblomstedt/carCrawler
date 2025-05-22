@@ -9,7 +9,7 @@ import csv
 import logging
 import pg8000
 from supabase_conf import DB_CONFIG
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -151,9 +151,16 @@ def crawl_kvd(limit=None):
 
     return {"status": "success", "processed_urls": len(detail_urls)}
 
-@app.route('/', methods=['POST'])
+@app.route('/', methods=['GET', 'POST'])
 def handle_request():
     """Cloud Run entry point."""
+    if request.method == 'GET':
+        return jsonify({
+            "status": "healthy",
+            "message": "Car crawler service is running. Use POST to trigger the crawler.",
+            "usage": "Send a POST request with optional 'limit' parameter in JSON body"
+        }), 200
+
     try:
         # Get the limit from the request if provided
         request_json = request.get_json(silent=True)
@@ -162,10 +169,10 @@ def handle_request():
         # Run the crawler
         result = crawl_kvd(limit=limit)
         
-        return result, 200
+        return jsonify(result), 200
     except Exception as e:
         logging.error(f"❌ Error in main function: {str(e)}")
-        return {"error": str(e)}, 500
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # This is used when running locally only. When deploying to Cloud Run,
