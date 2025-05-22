@@ -65,24 +65,47 @@ def extract_store_objects(script_content):
         
         if match:
             store_objects_str = match.group(1)
-            # Clean up the string to make it valid JSON
+            
+            # More aggressive JSON cleaning
+            # Replace undefined with null
             store_objects_str = re.sub(r'undefined', 'null', store_objects_str)
+            
+            # Handle dates
             store_objects_str = re.sub(r'new Date\((.*?)\)', r'"\1"', store_objects_str)
-            # Remove any trailing commas before closing braces
+            
+            # Remove trailing commas
             store_objects_str = re.sub(r',\s*}', '}', store_objects_str)
-            # Remove any trailing commas before closing brackets
             store_objects_str = re.sub(r',\s*]', ']', store_objects_str)
             
+            # Fix unquoted property names
+            store_objects_str = re.sub(r'([{,])\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', store_objects_str)
+            
+            # Fix single quotes to double quotes
+            store_objects_str = re.sub(r"'", '"', store_objects_str)
+            
+            # Remove any non-printable characters
+            store_objects_str = ''.join(char for char in store_objects_str if char.isprintable())
+            
+            # Remove any comments
+            store_objects_str = re.sub(r'//.*?\n', '\n', store_objects_str)
+            store_objects_str = re.sub(r'/\*.*?\*/', '', store_objects_str, flags=re.DOTALL)
+            
             try:
+                # Try to parse the JSON
                 return json.loads(store_objects_str)
             except json.JSONDecodeError as e:
                 logging.error(f"❌ JSON decode error: {str(e)}")
-                logging.debug(f"Problematic JSON string: {store_objects_str[:200]}...")  # Log first 200 chars
+                # Log the problematic part of the JSON
+                error_position = e.pos
+                start = max(0, error_position - 50)
+                end = min(len(store_objects_str), error_position + 50)
+                logging.error(f"Problematic JSON section: ...{store_objects_str[start:end]}...")
+                logging.error(f"Error position: {error_position}")
                 return None
         else:
             logging.warning("⚠️ No store objects found in script content")
             # Log a sample of the script content for debugging
-            logging.debug(f"Script content sample: {script_content[:500]}...")  # Log first 500 chars
+            logging.debug(f"Script content sample: {script_content[:500]}...")
             return None
     except Exception as e:
         logging.error(f"❌ Error extracting store objects: {str(e)}")
