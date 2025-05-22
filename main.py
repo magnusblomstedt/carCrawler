@@ -39,17 +39,54 @@ def get_db_connection():
 def extract_store_objects(script_content):
     """Extract store objects from script content."""
     try:
-        # Find the storeObjects assignment
+        # First try the standard pattern
         match = re.search(r'window\.storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        
+        # If not found, try alternative patterns
+        if not match:
+            # Try without window prefix
+            match = re.search(r'storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        
+        if not match:
+            # Try with var declaration
+            match = re.search(r'var\s+storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        
+        if not match:
+            # Try with const declaration
+            match = re.search(r'const\s+storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        
+        if not match:
+            # Try with let declaration
+            match = re.search(r'let\s+storeObjects\s*=\s*({.*?});', script_content, re.DOTALL)
+        
+        if not match:
+            # Try finding any object that might contain auction data
+            match = re.search(r'({.*?"id":\s*"\d+".*?})', script_content, re.DOTALL)
+        
         if match:
             store_objects_str = match.group(1)
             # Clean up the string to make it valid JSON
             store_objects_str = re.sub(r'undefined', 'null', store_objects_str)
             store_objects_str = re.sub(r'new Date\((.*?)\)', r'"\1"', store_objects_str)
-            return json.loads(store_objects_str)
+            # Remove any trailing commas before closing braces
+            store_objects_str = re.sub(r',\s*}', '}', store_objects_str)
+            # Remove any trailing commas before closing brackets
+            store_objects_str = re.sub(r',\s*]', ']', store_objects_str)
+            
+            try:
+                return json.loads(store_objects_str)
+            except json.JSONDecodeError as e:
+                logging.error(f"❌ JSON decode error: {str(e)}")
+                logging.debug(f"Problematic JSON string: {store_objects_str[:200]}...")  # Log first 200 chars
+                return None
+        else:
+            logging.warning("⚠️ No store objects found in script content")
+            # Log a sample of the script content for debugging
+            logging.debug(f"Script content sample: {script_content[:500]}...")  # Log first 500 chars
+            return None
     except Exception as e:
         logging.error(f"❌ Error extracting store objects: {str(e)}")
-    return None
+        return None
 
 def clean_model_name(model_name):
     """Clean and standardize model name."""
@@ -142,6 +179,9 @@ def crawl_kvd(limit=None):
     for detail_url in detail_urls:
         try:
             logging.info(f"🔍 Fetching {detail_url}")
+            # Add a small delay between requests
+            time.sleep(1)  # 1 second delay
+            
             response = requests.get(detail_url, allow_redirects=False)
             
             if response.status_code in (301, 302, 303, 307, 308):
