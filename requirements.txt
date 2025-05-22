@@ -1,3 +1,5 @@
 requests==2.31.0
 beautifulsoup4==4.12.2
-pg8000==1.30.5 
+pg8000==1.30.5
+flask==3.0.2
+gunicorn==21.2.0 
