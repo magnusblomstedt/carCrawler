@@ -290,12 +290,10 @@ def extract_fields(store):
         break
     return data
 
-def write_to_supabase(data):
+def write_to_supabase(data, idx=None, total=None):
     if not data or not data.get("auctionId"):
         logging.warning("⚠️ No data or auction ID provided to write_to_supabase")
         return
-
-    logging.info(f"📝 Preparing to write data for auction ID: {data['auctionId']}")
 
     try:
         # Convert datetime strings to proper format if they're not already
@@ -384,20 +382,22 @@ def write_to_supabase(data):
                 cur.execute("SELECT * FROM car_auctions WHERE auction_id = %s", (data['auctionId'],))
                 existing_record = cur.fetchone()
 
+                progress_str = f" (auction {idx} out of {total})" if idx is not None and total is not None else ""
+
                 if existing_record:
                     # Update existing record
                     set_clause = ", ".join([f"{k} = %s" for k in db_data.keys()])
                     values = list(db_data.values())
                     query = f"UPDATE car_auctions SET {set_clause} WHERE auction_id = %s"
                     cur.execute(query, values + [data['auctionId']])
-                    logging.info(f"🔄 Updated record for auction {data['auctionId']}")
+                    logging.info(f"🔄 Updated record for auction {data['auctionId']}{progress_str}")
                 else:
                     # Insert new record
                     columns = ", ".join(db_data.keys())
                     placeholders = ", ".join(["%s"] * len(db_data))
                     query = f"INSERT INTO car_auctions ({columns}) VALUES ({placeholders})"
                     cur.execute(query, list(db_data.values()))
-                    logging.info(f"📝 Created new record for auction {data['auctionId']}")
+                    logging.info(f"📝 Created new record for auction {data['auctionId']}{progress_str}")
 
                 conn.commit()
 
@@ -407,7 +407,7 @@ def write_to_supabase(data):
         import traceback
         logging.error(f"❌ Full traceback: {traceback.format_exc()}")
 
-def process_url_single(detail_url):
+def process_url_single(detail_url, idx=None, total=None):
     """Process a single URL and write the result to the database."""
     for attempt in range(MAX_RETRIES):
         try:
@@ -476,7 +476,7 @@ def process_url_single(detail_url):
                 if record:
                     record['mainImageUrl'] = main_image_url
                     record['imageSource'] = image_source
-                    write_to_supabase(record)
+                    write_to_supabase(record, idx=idx, total=total)
                     # Explicitly free memory
                     del detail_soup, scripts, store_data, record
                     gc.collect()
@@ -513,7 +513,7 @@ def crawl_kvd(limit=None):
         logging.info(f"🔍 Processing {total_urls} URLs one at a time")
         for i, detail_url in enumerate(detail_urls, 1):
             logging.info(f"➡️ Processing {i}/{total_urls}: {detail_url}")
-            process_url_single(detail_url)
+            process_url_single(detail_url, idx=i, total=total_urls)
             gc.collect()
             time.sleep(2)  # Small delay between records
         logging.info(f"✅ Finished crawling all {total_urls} URLs at {datetime.now()}.")
