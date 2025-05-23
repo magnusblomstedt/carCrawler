@@ -36,9 +36,10 @@ logging.basicConfig(
 )
 
 # Constants for batch processing
-BATCH_SIZE = 10  # Process 10 URLs at a time
+BATCH_SIZE = 5  # Reduced to 5 URLs at a time
 REQUEST_TIMEOUT = 30  # 30 seconds timeout for requests
 MAX_RETRIES = 3  # Maximum number of retries for failed requests
+CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, 'crawler_checkpoint.json')
 
 # Database setup
 def get_db_connection():
@@ -378,6 +379,35 @@ def write_to_supabase(data):
         import traceback
         logging.error(f"❌ Full traceback: {traceback.format_exc()}")
 
+def save_checkpoint(processed_urls):
+    """Save the list of processed URLs to a checkpoint file."""
+    try:
+        with open(CHECKPOINT_FILE, 'w') as f:
+            json.dump({
+                'timestamp': datetime.now().isoformat(),
+                'processed_urls': processed_urls
+            }, f)
+    except Exception as e:
+        logging.error(f"❌ Error saving checkpoint: {str(e)}")
+
+def load_checkpoint():
+    """Load the checkpoint file if it exists."""
+    try:
+        if os.path.exists(CHECKPOINT_FILE):
+            with open(CHECKPOINT_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logging.error(f"❌ Error loading checkpoint: {str(e)}")
+    return None
+
+def clear_checkpoint():
+    """Clear the checkpoint file."""
+    try:
+        if os.path.exists(CHECKPOINT_FILE):
+            os.remove(CHECKPOINT_FILE)
+    except Exception as e:
+        logging.error(f"❌ Error clearing checkpoint: {str(e)}")
+
 def process_url_batch(urls, limit=None):
     """Process a batch of URLs and return the results."""
     results = []
@@ -486,14 +516,24 @@ def process_url_batch(urls, limit=None):
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
     all_records = []
+    processed_urls = set()
 
     try:
+        # Check for existing checkpoint
+        checkpoint = load_checkpoint()
+        if checkpoint:
+            processed_urls = set(checkpoint.get('processed_urls', []))
+            logging.info(f"📋 Resuming from checkpoint with {len(processed_urls)} processed URLs")
+
         url = "https://www.kvd.se/stangda-auktioner"
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         soup = BeautifulSoup(response.text, 'html.parser')
 
         links = soup.select('a[href^="/auktioner/"]')
         detail_urls = {"https://www.kvd.se" + a['href'] for a in links}
+        
+        # Remove already processed URLs
+        detail_urls = detail_urls - processed_urls
         
         if limit:
             detail_urls = list(detail_urls)[:limit]
@@ -509,6 +549,10 @@ def crawl_kvd(limit=None):
             batch_results = process_url_batch(batch_urls, limit)
             if limit:
                 all_records.extend(batch_results)
+            
+            # Update processed URLs
+            processed_urls.update(batch_urls)
+            save_checkpoint(list(processed_urls))
             
             # Force garbage collection after each batch
             gc.collect()
@@ -526,6 +570,8 @@ def crawl_kvd(limit=None):
                 writer.writerows(all_records)
             logging.info(f"✅ CSV file created: {csv_filename}")
 
+        # Clear checkpoint on successful completion
+        clear_checkpoint()
         return {"status": "success", "processed_urls": total_urls}
 
     except Exception as e:
