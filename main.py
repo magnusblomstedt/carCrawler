@@ -19,7 +19,9 @@ Starting manually on Google Could Run Function
 curl -X POST https://car-crawler-884815102822.europe-west4.run.app/ \
   -H "Content-Type: application/json" \
   -d '{"limit": null}'
+
 """
+
 
 app = Flask(__name__)
 
