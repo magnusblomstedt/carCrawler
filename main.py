@@ -12,6 +12,7 @@ import ssl
 import gc
 from supabase_conf import DB_CONFIG
 from flask import Flask, request, jsonify
+import psutil
 
 """
 Starting manually on Google Could Run Function
@@ -437,10 +438,16 @@ def clear_checkpoint():
     except Exception as e:
         logging.error(f"❌ Error clearing checkpoint: {str(e)}")
 
+def log_memory_usage(context=""):
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    logging.info(f"MEMORY USAGE {context}: RSS={mem_info.rss / (1024 * 1024):.2f} MB, VMS={mem_info.vms / (1024 * 1024):.2f} MB")
+
 def process_url_single(detail_url):
     """Process a single URL and write the result to the database."""
     for attempt in range(MAX_RETRIES):
         try:
+            log_memory_usage(f"before processing {detail_url}")
             logging.info(f"🔍 Fetching {detail_url} (attempt {attempt + 1}/{MAX_RETRIES})")
             time.sleep(1)  # 1 second delay between requests
             
@@ -510,6 +517,7 @@ def process_url_single(detail_url):
                     # Explicitly free memory
                     del detail_soup, scripts, store_data, record
                     gc.collect()
+                    log_memory_usage(f"after processing {detail_url}")
                     return
                 else:
                     logging.warning(f"⚠️ Failed to extract fields from store data for {detail_url}")
@@ -527,11 +535,12 @@ def process_url_single(detail_url):
             if attempt == MAX_RETRIES - 1:
                 logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
             time.sleep(2 ** attempt)  # Exponential backoff
-        # Explicitly free memory on each attempt
         gc.collect()
+        log_memory_usage(f"after gc.collect() for {detail_url}")
 
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
+    log_memory_usage("at crawl start")
     try:
         url = "https://www.kvd.se/stangda-auktioner"
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -545,12 +554,14 @@ def crawl_kvd(limit=None):
         for i, detail_url in enumerate(detail_urls, 1):
             logging.info(f"➡️ Processing {i}/{total_urls}: {detail_url}")
             process_url_single(detail_url)
-            # Explicitly free memory after each record
             gc.collect()
+            log_memory_usage(f"after gc.collect() in crawl_kvd loop {i}/{total_urls}")
             time.sleep(2)  # Small delay between records
+        log_memory_usage("at crawl end")
         return {"status": "success", "processed_urls": total_urls}
     except Exception as e:
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
+        log_memory_usage("on crawl error")
         return {"status": "error", "error": str(e)}
 
 @app.route('/', methods=['GET', 'POST'])
