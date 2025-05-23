@@ -12,7 +12,6 @@ import ssl
 import gc
 from supabase_conf import DB_CONFIG
 from flask import Flask, request, jsonify
-import psutil
 
 """
 Starting manually on Google Could Run Function
@@ -42,7 +41,6 @@ logging.basicConfig(
 BATCH_SIZE = 1  # Still process one at a time for memory
 REQUEST_TIMEOUT = 30  # 30 seconds timeout for requests
 MAX_RETRIES = 6  # Increased number of retries for failed requests
-CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, 'crawler_checkpoint.json')
 
 # Database setup
 def get_db_connection():
@@ -409,45 +407,10 @@ def write_to_supabase(data):
         import traceback
         logging.error(f"❌ Full traceback: {traceback.format_exc()}")
 
-def save_checkpoint(processed_urls):
-    """Save the list of processed URLs to a checkpoint file."""
-    try:
-        with open(CHECKPOINT_FILE, 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'processed_urls': processed_urls
-            }, f)
-    except Exception as e:
-        logging.error(f"❌ Error saving checkpoint: {str(e)}")
-
-def load_checkpoint():
-    """Load the checkpoint file if it exists."""
-    try:
-        if os.path.exists(CHECKPOINT_FILE):
-            with open(CHECKPOINT_FILE, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        logging.error(f"❌ Error loading checkpoint: {str(e)}")
-    return None
-
-def clear_checkpoint():
-    """Clear the checkpoint file."""
-    try:
-        if os.path.exists(CHECKPOINT_FILE):
-            os.remove(CHECKPOINT_FILE)
-    except Exception as e:
-        logging.error(f"❌ Error clearing checkpoint: {str(e)}")
-
-def log_memory_usage(context=""):
-    process = psutil.Process(os.getpid())
-    mem_info = process.memory_info()
-    logging.info(f"MEMORY USAGE {context}: RSS={mem_info.rss / (1024 * 1024):.2f} MB, VMS={mem_info.vms / (1024 * 1024):.2f} MB")
-
 def process_url_single(detail_url):
     """Process a single URL and write the result to the database."""
     for attempt in range(MAX_RETRIES):
         try:
-            log_memory_usage(f"before processing {detail_url}")
             logging.info(f"🔍 Fetching {detail_url} (attempt {attempt + 1}/{MAX_RETRIES})")
             time.sleep(5)  # 5 second delay between requests
             
@@ -517,7 +480,6 @@ def process_url_single(detail_url):
                     # Explicitly free memory
                     del detail_soup, scripts, store_data, record
                     gc.collect()
-                    log_memory_usage(f"after processing {detail_url}")
                     return
                 else:
                     logging.warning(f"⚠️ Failed to extract fields from store data for {detail_url}")
@@ -536,11 +498,9 @@ def process_url_single(detail_url):
                 logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
             time.sleep(5 * (attempt + 1))  # More forgiving backoff
         gc.collect()
-        log_memory_usage(f"after gc.collect() for {detail_url}")
 
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
-    log_memory_usage("at crawl start")
     try:
         url = "https://www.kvd.se/stangda-auktioner"
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
@@ -555,13 +515,11 @@ def crawl_kvd(limit=None):
             logging.info(f"➡️ Processing {i}/{total_urls}: {detail_url}")
             process_url_single(detail_url)
             gc.collect()
-            log_memory_usage(f"after gc.collect() in crawl_kvd loop {i}/{total_urls}")
             time.sleep(2)  # Small delay between records
-        log_memory_usage("at crawl end")
+        logging.info(f"✅ Finished crawling all {total_urls} URLs at {datetime.now()}.")
         return {"status": "success", "processed_urls": total_urls}
     except Exception as e:
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
-        log_memory_usage("on crawl error")
         return {"status": "error", "error": str(e)}
 
 @app.route('/', methods=['GET', 'POST'])
