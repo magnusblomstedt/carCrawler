@@ -8,8 +8,17 @@ import os
 import csv
 import logging
 import pg8000
+import ssl
 from supabase_conf import DB_CONFIG
 from flask import Flask, request, jsonify
+
+"""
+Starting manually on Google Could Run Function
+
+curl -X POST https://car-crawler-884815102822.europe-west4.run.app/ \
+  -H "Content-Type: application/json" \
+  -d '{"limit": null}'
+"""
 
 app = Flask(__name__)
 
@@ -27,14 +36,23 @@ logging.basicConfig(
 
 # Database setup
 def get_db_connection():
-    return pg8000.connect(
-        user=DB_CONFIG['user'],
-        password=DB_CONFIG['password'],
-        host=DB_CONFIG['host'],
-        port=DB_CONFIG['port'],
-        database=DB_CONFIG['database'],
-        ssl_context=True
-    )
+    try:
+        # Create SSL context that doesn't verify certificates
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        return pg8000.connect(
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            host=DB_CONFIG['host'],
+            port=DB_CONFIG['port'],
+            database=DB_CONFIG['database'],
+            ssl_context=ssl_context
+        )
+    except Exception as e:
+        logging.error(f"❌ Database connection error: {str(e)}")
+        raise
 
 # ---------- JSON extractor using balanced brackets ----------
 def extract_store_objects(script_content):
