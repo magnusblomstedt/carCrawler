@@ -311,6 +311,22 @@ def write_to_supabase(data):
         if object_view_json:
             object_view_json = json.dumps(object_view_json)
 
+        # Convert numeric fields to appropriate types
+        numeric_fields = {
+            'soldFor': float,
+            'buyNowAmount': float,
+            'preliminaryPrice': float,
+            'winningBid': float,
+            'highestBid': float,
+            'odometerReading': int,
+            'year': int,
+            'batteryCapacity': float,
+            'rangeCityWltpDrive': int,
+            'rangeWltpDrive': int,
+            'enginePowerHp': int,
+            'enginePower': int
+        }
+
         # Prepare the data for database
         db_data = {
             'auction_id': data['auctionId'],
@@ -349,6 +365,17 @@ def write_to_supabase(data):
             'object_view_json': object_view_json,
             'base_object_type': data.get('base_object_type')
         }
+
+        # Convert numeric fields to appropriate types
+        for field, type_func in numeric_fields.items():
+            db_field = field[0].lower() + field[1:]  # Convert to snake_case
+            value = db_data.get(db_field)
+            if value is not None:
+                try:
+                    db_data[db_field] = type_func(value)
+                except (ValueError, TypeError):
+                    logging.warning(f"⚠️ Could not convert {field} value '{value}' to {type_func.__name__}")
+                    db_data[db_field] = None
 
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -408,172 +435,118 @@ def clear_checkpoint():
     except Exception as e:
         logging.error(f"❌ Error clearing checkpoint: {str(e)}")
 
-def process_url_batch(urls, limit=None):
-    """Process a batch of URLs and return the results."""
-    results = []
-    for detail_url in urls:
-        for attempt in range(MAX_RETRIES):
-            try:
-                logging.info(f"🔍 Fetching {detail_url} (attempt {attempt + 1}/{MAX_RETRIES})")
-                time.sleep(1)  # 1 second delay between requests
-                
-                response = requests.get(detail_url, allow_redirects=False, timeout=REQUEST_TIMEOUT)
-                
-                if response.status_code in (301, 302, 303, 307, 308):
-                    logging.warning(f"⚠️ Skipping {detail_url} - URL redirects to {response.headers.get('Location', 'unknown')}")
-                    break
-                    
-                page = requests.get(detail_url, timeout=REQUEST_TIMEOUT)
-                detail_soup = BeautifulSoup(page.text, 'html.parser')
-                scripts = detail_soup.find_all('script')
+def process_url_single(detail_url):
+    """Process a single URL and write the result to the database."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            logging.info(f"🔍 Fetching {detail_url} (attempt {attempt + 1}/{MAX_RETRIES})")
+            time.sleep(1)  # 1 second delay between requests
+            
+            response = requests.get(detail_url, allow_redirects=False, timeout=REQUEST_TIMEOUT)
+            if response.status_code in (301, 302, 303, 307, 308):
+                logging.warning(f"⚠️ Skipping {detail_url} - URL redirects to {response.headers.get('Location', 'unknown')}")
+                return
+            page = requests.get(detail_url, timeout=REQUEST_TIMEOUT)
+            detail_soup = BeautifulSoup(page.text, 'html.parser')
+            scripts = detail_soup.find_all('script')
 
-                # Try to get image URL from store data first
-                main_image_url = None
-                image_source = None
-                
-                store_data = None
-                for script in scripts:
-                    if script.string and "storeObjects" in script.string:
-                        store_data = extract_store_objects(script.string)
-                        if store_data:
-                            break
+            # Try to get image URL from store data first
+            main_image_url = None
+            image_source = None
+            store_data = None
+            for script in scripts:
+                if script.string and "storeObjects" in script.string:
+                    store_data = extract_store_objects(script.string)
+                    if store_data:
+                        break
 
-                if store_data:
-                    # Try to get image from objectView.storeObjects.{auctionId}.previewImage
-                    for key, item in store_data.get('objectView', {}).get('storeObjects', {}).items():
-                        if item and item.get('previewImage'):
-                            main_image_url = item['previewImage']
-                            image_source = 'store_data_preview_image'
-                            logging.info(f"✅ Found image URL in store data previewImage: {main_image_url}")
-                            break
+            if store_data:
+                # Try to get image from objectView.storeObjects.{auctionId}.previewImage
+                for key, item in store_data.get('objectView', {}).get('storeObjects', {}).items():
+                    if item and item.get('previewImage'):
+                        main_image_url = item['previewImage']
+                        image_source = 'store_data_preview_image'
+                        logging.info(f"✅ Found image URL in store data previewImage: {main_image_url}")
+                        break
 
-                # If no image found in store data, try meta tags
-                if not main_image_url:
-                    # Try multiple ways to find the image URL in meta tags
-                    meta_image = detail_soup.find('meta', property='og:image')
+            # If no image found in store data, try meta tags
+            if not main_image_url:
+                meta_image = detail_soup.find('meta', property='og:image')
+                if meta_image and meta_image.get('content'):
+                    main_image_url = meta_image['content']
+                    image_source = 'meta_og_image'
+                else:
+                    meta_image = detail_soup.find('meta', attrs={'property': 'og:image', 'data-react-helmet': 'true'})
                     if meta_image and meta_image.get('content'):
                         main_image_url = meta_image['content']
-                        image_source = 'meta_og_image'
+                        image_source = 'meta_react_helmet'
                     else:
-                        # Try with React Helmet attribute
-                        meta_image = detail_soup.find('meta', attrs={'property': 'og:image', 'data-react-helmet': 'true'})
+                        meta_image = detail_soup.find('meta', attrs={'name': 'og:image'})
                         if meta_image and meta_image.get('content'):
                             main_image_url = meta_image['content']
-                            image_source = 'meta_react_helmet'
+                            image_source = 'meta_name_og_image'
                         else:
-                            # Try alternative meta tag formats
-                            meta_image = detail_soup.find('meta', attrs={'name': 'og:image'})
-                            if meta_image and meta_image.get('content'):
-                                main_image_url = meta_image['content']
-                                image_source = 'meta_name_og_image'
-                            else:
-                                # Try to find any meta tag with image in content
-                                meta_images = detail_soup.find_all('meta')
-                                for meta in meta_images:
-                                    content = meta.get('content', '')
-                                    if 'imgix.net' in content:
-                                        main_image_url = content
-                                        image_source = 'meta_imgix_net'
-                                        break
+                            meta_images = detail_soup.find_all('meta')
+                            for meta in meta_images:
+                                content = meta.get('content', '')
+                                if 'imgix.net' in content:
+                                    main_image_url = content
+                                    image_source = 'meta_imgix_net'
+                                    break
 
-                if main_image_url:
-                    logging.info(f"✅ Found image URL from {image_source}: {main_image_url}")
-                else:
-                    logging.warning(f"⚠️ No image URL found for {detail_url}")
+            if main_image_url:
+                logging.info(f"✅ Found image URL from {image_source}: {main_image_url}")
+            else:
+                logging.warning(f"⚠️ No image URL found for {detail_url}")
 
-                if store_data:
-                    record = extract_fields(store_data)
-                    if record:
-                        record['mainImageUrl'] = main_image_url
-                        record['imageSource'] = image_source
-                        write_to_supabase(record)
-                        if limit:
-                            results.append(record)
-                        break  # Success, exit retry loop
-                    else:
-                        logging.warning(f"⚠️ Failed to extract fields from store data for {detail_url}")
+            if store_data:
+                record = extract_fields(store_data)
+                if record:
+                    record['mainImageUrl'] = main_image_url
+                    record['imageSource'] = image_source
+                    write_to_supabase(record)
+                    # Explicitly free memory
+                    del detail_soup, scripts, store_data, record
+                    gc.collect()
+                    return
                 else:
-                    logging.warning(f"⚠️ Failed to extract JSON from {detail_url}")
-                    if attempt == MAX_RETRIES - 1:
-                        logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
-                
-            except requests.exceptions.RequestException as e:
-                logging.error(f"❌ Network error for {detail_url}: {str(e)}")
+                    logging.warning(f"⚠️ Failed to extract fields from store data for {detail_url}")
+            else:
+                logging.warning(f"⚠️ Failed to extract JSON from {detail_url}")
                 if attempt == MAX_RETRIES - 1:
                     logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
-                time.sleep(2 ** attempt)  # Exponential backoff
-            except Exception as e:
-                logging.error(f"❌ Unexpected error for {detail_url}: {str(e)}")
-                if attempt == MAX_RETRIES - 1:
-                    logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
-                time.sleep(2 ** attempt)  # Exponential backoff
-
-        # Force garbage collection after each URL
+        except requests.exceptions.RequestException as e:
+            logging.error(f"❌ Network error for {detail_url}: {str(e)}")
+            if attempt == MAX_RETRIES - 1:
+                logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
+            time.sleep(2 ** attempt)  # Exponential backoff
+        except Exception as e:
+            logging.error(f"❌ Unexpected error for {detail_url}: {str(e)}")
+            if attempt == MAX_RETRIES - 1:
+                logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
+            time.sleep(2 ** attempt)  # Exponential backoff
+        # Explicitly free memory on each attempt
         gc.collect()
-
-    return results
 
 def crawl_kvd(limit=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
-    all_records = []
-    processed_urls = set()
-
     try:
-        # Check for existing checkpoint
-        checkpoint = load_checkpoint()
-        if checkpoint:
-            processed_urls = set(checkpoint.get('processed_urls', []))
-            logging.info(f"📋 Resuming from checkpoint with {len(processed_urls)} processed URLs")
-
         url = "https://www.kvd.se/stangda-auktioner"
         response = requests.get(url, timeout=REQUEST_TIMEOUT)
         soup = BeautifulSoup(response.text, 'html.parser')
-
         links = soup.select('a[href^="/auktioner/"]')
-        detail_urls = {"https://www.kvd.se" + a['href'] for a in links}
-        
-        # Remove already processed URLs
-        detail_urls = detail_urls - processed_urls
-        
+        detail_urls = ["https://www.kvd.se" + a['href'] for a in links]
         if limit:
-            detail_urls = list(detail_urls)[:limit]
-        
+            detail_urls = detail_urls[:limit]
         total_urls = len(detail_urls)
-        logging.info(f"🔍 Processing {total_urls} URLs in batches of {BATCH_SIZE}")
-
-        # Process URLs in batches
-        for i in range(0, total_urls, BATCH_SIZE):
-            batch_urls = list(detail_urls)[i:i + BATCH_SIZE]
-            logging.info(f"📦 Processing batch {i//BATCH_SIZE + 1} of {(total_urls + BATCH_SIZE - 1)//BATCH_SIZE}")
-            
-            batch_results = process_url_batch(batch_urls, limit)
-            if limit:
-                all_records.extend(batch_results)
-            
-            # Update processed URLs
-            processed_urls.update(batch_urls)
-            save_checkpoint(list(processed_urls))
-            
-            # Force garbage collection after each batch
+        logging.info(f"🔍 Processing {total_urls} URLs one at a time")
+        for i, detail_url in enumerate(detail_urls, 1):
+            logging.info(f"➡️ Processing {i}/{total_urls}: {detail_url}")
+            process_url_single(detail_url)
+            # Explicitly free memory after each record
             gc.collect()
-            
-            # Add a small delay between batches
-            time.sleep(2)
-
-        if limit and all_records:
-            csv_filename = os.path.join(SCRIPT_DIR, f'cars_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
-            logging.info(f"📝 Writing {len(all_records)} records to {csv_filename}")
-            with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
-                fieldnames = all_records[0].keys()
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(all_records)
-            logging.info(f"✅ CSV file created: {csv_filename}")
-
-        # Clear checkpoint on successful completion
-        clear_checkpoint()
+            time.sleep(2)  # Small delay between records
         return {"status": "success", "processed_urls": total_urls}
-
     except Exception as e:
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
         return {"status": "error", "error": str(e)}
