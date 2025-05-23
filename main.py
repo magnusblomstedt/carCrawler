@@ -39,9 +39,9 @@ logging.basicConfig(
 )
 
 # Constants for batch processing
-BATCH_SIZE = 5  # Reduced to 5 URLs at a time
+BATCH_SIZE = 1  # Still process one at a time for memory
 REQUEST_TIMEOUT = 30  # 30 seconds timeout for requests
-MAX_RETRIES = 3  # Maximum number of retries for failed requests
+MAX_RETRIES = 6  # Increased number of retries for failed requests
 CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, 'crawler_checkpoint.json')
 
 # Database setup
@@ -449,7 +449,7 @@ def process_url_single(detail_url):
         try:
             log_memory_usage(f"before processing {detail_url}")
             logging.info(f"🔍 Fetching {detail_url} (attempt {attempt + 1}/{MAX_RETRIES})")
-            time.sleep(1)  # 1 second delay between requests
+            time.sleep(5)  # 5 second delay between requests
             
             response = requests.get(detail_url, allow_redirects=False, timeout=REQUEST_TIMEOUT)
             if response.status_code in (301, 302, 303, 307, 308):
@@ -529,12 +529,12 @@ def process_url_single(detail_url):
             logging.error(f"❌ Network error for {detail_url}: {str(e)}")
             if attempt == MAX_RETRIES - 1:
                 logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(5 * (attempt + 1))  # More forgiving backoff
         except Exception as e:
             logging.error(f"❌ Unexpected error for {detail_url}: {str(e)}")
             if attempt == MAX_RETRIES - 1:
                 logging.error(f"❌ Failed to process {detail_url} after {MAX_RETRIES} attempts")
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(5 * (attempt + 1))  # More forgiving backoff
         gc.collect()
         log_memory_usage(f"after gc.collect() for {detail_url}")
 
