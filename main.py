@@ -499,7 +499,7 @@ def process_url_single(detail_url, idx=None, total=None):
             time.sleep(5 * (attempt + 1))  # More forgiving backoff
         gc.collect()
 
-def crawl_kvd(limit=None):
+def crawl_kvd(startAuctionCrawlCount=None, endAuctionCrawlCount=None):
     logging.info(f"🚗 Starting crawl at {datetime.now()}...")
     try:
         url = "https://www.kvd.se/stangda-auktioner"
@@ -507,17 +507,24 @@ def crawl_kvd(limit=None):
         soup = BeautifulSoup(response.text, 'html.parser')
         links = soup.select('a[href^="/auktioner/"]')
         detail_urls = ["https://www.kvd.se" + a['href'] for a in links]
-        if limit:
-            detail_urls = detail_urls[:limit]
         total_urls = len(detail_urls)
-        logging.info(f"🔍 Processing {total_urls} URLs one at a time")
+
+        # Determine the range to crawl (1-based inclusive)
+        if startAuctionCrawlCount is not None and endAuctionCrawlCount is not None:
+            start_idx = max(0, int(startAuctionCrawlCount) - 1)
+            end_idx = min(int(endAuctionCrawlCount), total_urls)
+            detail_urls = detail_urls[start_idx:end_idx]
+            logging.info(f"🔍 Processing auctions {startAuctionCrawlCount} to {endAuctionCrawlCount} (indexes {start_idx+1} to {end_idx}) out of {total_urls} total URLs")
+        else:
+            logging.info(f"🔍 Processing all {total_urls} URLs one at a time")
+
         for i, detail_url in enumerate(detail_urls, 1):
-            logging.info(f"➡️ Processing {i}/{total_urls}: {detail_url}")
-            process_url_single(detail_url, idx=i, total=total_urls)
+            logging.info(f"➡️ Processing {i}/{len(detail_urls)}: {detail_url}")
+            process_url_single(detail_url, idx=i, total=len(detail_urls))
             gc.collect()
             time.sleep(2)  # Small delay between records
-        logging.info(f"✅ Finished crawling all {total_urls} URLs at {datetime.now()}.")
-        return {"status": "success", "processed_urls": total_urls}
+        logging.info(f"✅ Finished crawling {len(detail_urls)} URLs at {datetime.now()}.")
+        return {"status": "success", "processed_urls": len(detail_urls)}
     except Exception as e:
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
         return {"status": "error", "error": str(e)}
@@ -529,16 +536,17 @@ def handle_request():
         return jsonify({
             "status": "healthy",
             "message": "Car crawler service is running. Use POST to trigger the crawler.",
-            "usage": "Send a POST request with optional 'limit' parameter in JSON body"
+            "usage": "Send a POST request with 'startAuctionCrawlCount' and 'endAuctionCrawlCount' in JSON body (1-based inclusive)"
         }), 200
 
     try:
-        # Get the limit from the request if provided
+        # Get the range from the request if provided
         request_json = request.get_json(silent=True)
-        limit = request_json.get('limit') if request_json else None
+        start_count = request_json.get('startAuctionCrawlCount') if request_json else None
+        end_count = request_json.get('endAuctionCrawlCount') if request_json else None
         
         # Run the crawler
-        result = crawl_kvd(limit=limit)
+        result = crawl_kvd(startAuctionCrawlCount=start_count, endAuctionCrawlCount=end_count)
         
         return jsonify(result), 200
     except Exception as e:
