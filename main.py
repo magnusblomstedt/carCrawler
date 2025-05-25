@@ -22,9 +22,6 @@ curl -X POST https://car-crawler-884815102822.europe-west4.run.app/ \
 
 """
 
-
-app = Flask(__name__)
-
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
