@@ -11,7 +11,7 @@ import pg8000
 import ssl
 import gc
 from supabase_conf import DB_CONFIG
-from flask import Flask, request, jsonify
+import argparse
 
 """
 Starting manually on Google Could Run Function
@@ -529,31 +529,10 @@ def crawl_kvd(startAuctionCrawlCount=None, endAuctionCrawlCount=None):
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
         return {"status": "error", "error": str(e)}
 
-@app.route('/', methods=['GET', 'POST'])
-def handle_request():
-    """Cloud Run entry point."""
-    if request.method == 'GET':
-        return jsonify({
-            "status": "healthy",
-            "message": "Car crawler service is running. Use POST to trigger the crawler.",
-            "usage": "Send a POST request with 'startAuctionCrawlCount' and 'endAuctionCrawlCount' in JSON body (1-based inclusive)"
-        }), 200
-
-    try:
-        # Get the range from the request if provided
-        request_json = request.get_json(silent=True)
-        start_count = request_json.get('startAuctionCrawlCount') if request_json else None
-        end_count = request_json.get('endAuctionCrawlCount') if request_json else None
-        
-        # Run the crawler
-        result = crawl_kvd(startAuctionCrawlCount=start_count, endAuctionCrawlCount=end_count)
-        
-        return jsonify(result), 200
-    except Exception as e:
-        logging.error(f"❌ Error in main function: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
 if __name__ == '__main__':
-    # This is used when running locally only. When deploying to Cloud Run,
-    # a production-grade WSGI server will be used instead.
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))) 
+    parser = argparse.ArgumentParser(description='Run car auction crawler in batch mode.')
+    parser.add_argument('--startAuctionCrawlCount', type=int, default=None, help='Start index (1-based, inclusive)')
+    parser.add_argument('--endAuctionCrawlCount', type=int, default=None, help='End index (1-based, inclusive)')
+    args = parser.parse_args()
+    
+    crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount) 
