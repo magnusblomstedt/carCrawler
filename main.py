@@ -12,6 +12,7 @@ import ssl
 import gc
 from supabase_conf import DB_CONFIG
 import argparse
+import google.cloud.logging
 
 """
 Starting manually on Google Could Run Function
@@ -38,6 +39,11 @@ REQUEST_TIMEOUT = 30  # 30 seconds timeout for requests
 MAX_RETRIES = 6  # Increased number of retries for failed requests
 
 print("Hello from Cloud Batch!")
+
+client = google.cloud.logging.Client()
+logger = client.logger("my-script-logger")
+logger.log_text("This is a log entry from Cloud Batch script startup.")
+logger.log_struct({"message": "This is a structured log from Cloud Batch script startup.", "severity": "INFO"})
 
 # Database setup
 def get_db_connection():
