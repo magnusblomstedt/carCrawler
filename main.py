@@ -12,7 +12,6 @@ import ssl
 import gc
 from supabase_conf import DB_CONFIG
 import argparse
-import google.cloud.logging
 
 """
 Starting manually on Google Could Run Function
@@ -30,20 +29,16 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[
+        logging.FileHandler("/workspace/car-crawler.log"),
+        logging.StreamHandler()
+    ]
 )
 
 # Constants for batch processing
 BATCH_SIZE = 1  # Still process one at a time for memory
 REQUEST_TIMEOUT = 30  # 30 seconds timeout for requests
 MAX_RETRIES = 6  # Increased number of retries for failed requests
-
-print("Hello from Cloud Batch!")
-
-client = google.cloud.logging.Client()
-logger = client.logger("my-script-logger")
-logger.log_text("This is a log entry from Cloud Batch script startup.")
-logger.log_struct({"message": "This is a structured log from Cloud Batch script startup.", "severity": "INFO"})
 
 # Database setup
 def get_db_connection():
@@ -537,5 +532,4 @@ if __name__ == '__main__':
     parser.add_argument('--startAuctionCrawlCount', type=int, default=None, help='Start index (1-based, inclusive)')
     parser.add_argument('--endAuctionCrawlCount', type=int, default=None, help='End index (1-based, inclusive)')
     args = parser.parse_args()
-    print("Hello from Cloud Batch!")
     crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount) 
