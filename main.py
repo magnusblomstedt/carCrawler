@@ -30,7 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(message)s',
     handlers=[
-        logging.FileHandler("/workspace/car-crawler.log"),
+        # logging.FileHandler("/workspace/car-crawler.log"),
         logging.StreamHandler()
     ]
 )
