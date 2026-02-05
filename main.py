@@ -378,7 +378,7 @@ def write_to_supabase(data, idx=None, total=None):
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 # Check if record exists
-                cur.execute("SELECT * FROM car_auctions WHERE auction_id = %s", (data['auctionId'],))
+                cur.execute("SELECT * FROM beggadbil.car_auctions WHERE auction_id = %s", (data['auctionId'],))
                 existing_record = cur.fetchone()
 
                 progress_str = f" (auction {idx} out of {total})" if idx is not None and total is not None else ""
@@ -387,14 +387,14 @@ def write_to_supabase(data, idx=None, total=None):
                     # Update existing record
                     set_clause = ", ".join([f"{k} = %s" for k in db_data.keys()])
                     values = list(db_data.values())
-                    query = f"UPDATE car_auctions SET {set_clause} WHERE auction_id = %s"
+                    query = f"UPDATE beggadbil.car_auctions SET {set_clause} WHERE auction_id = %s"
                     cur.execute(query, values + [data['auctionId']])
                     logging.info(f"🔄 Updated record for auction {data['auctionId']}{progress_str}")
                 else:
                     # Insert new record
                     columns = ", ".join(db_data.keys())
                     placeholders = ", ".join(["%s"] * len(db_data))
-                    query = f"INSERT INTO car_auctions ({columns}) VALUES ({placeholders})"
+                    query = f"INSERT INTO beggadbil.car_auctions ({columns}) VALUES ({placeholders})"
                     cur.execute(query, list(db_data.values()))
                     logging.info(f"📝 Created new record for auction {data['auctionId']}{progress_str}")
 
