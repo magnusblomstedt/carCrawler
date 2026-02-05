@@ -556,15 +556,18 @@ def handle_request():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Check if running as a web service (Cloud Run) or command line (local/batch)
+    # Check if running as a web service (Cloud Run Service) or batch job (Cloud Run Jobs/Cloud Batch)
     import sys
-    if len(sys.argv) > 1:
-        # Command line mode (for local testing or Cloud Batch/Cloud Run Jobs)
+    
+    # If PORT environment variable is set, we're in Cloud Run Service (web mode)
+    # Otherwise, we're in batch mode (Cloud Run Jobs, Cloud Batch, or local CLI)
+    if os.environ.get('PORT') and len(sys.argv) == 1:
+        # Web service mode (for Cloud Run HTTP requests)
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    else:
+        # Command line/batch mode (for Cloud Run Jobs, Cloud Batch, or local testing)
         parser = argparse.ArgumentParser(description='Run car auction crawler in batch mode.')
         parser.add_argument('--startAuctionCrawlCount', type=int, default=None, help='Start index (1-based, inclusive)')
         parser.add_argument('--endAuctionCrawlCount', type=int, default=None, help='End index (1-based, inclusive)')
         args = parser.parse_args()
-        crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount)
-    else:
-        # Web service mode (for Cloud Run HTTP requests)
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))) 
+        crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount) 
