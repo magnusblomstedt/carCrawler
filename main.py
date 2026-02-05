@@ -12,6 +12,7 @@ import ssl
 import gc
 from supabase_conf import DB_CONFIG
 import argparse
+from flask import Flask, request, jsonify
 
 """
 Starting manually on Google Could Run Function
@@ -154,8 +155,8 @@ def extract_fields(store):
     data = {}
     for key, item in store.get('objectView', {}).get('storeObjects', {}).items():
         if not item:
-            continue
-
+                continue
+                
         # Safely get nested objects with defaults
         process_object = item.get("processObject", {}) or {}
         base_obj = process_object.get("baseObject", {}) or {}
@@ -403,7 +404,7 @@ def write_to_supabase(data, idx=None, total=None):
         logging.error(f"❌ Error writing to database: {str(e)}")
         logging.error(f"❌ Error details: {type(e).__name__}")
         import traceback
-        logging.error(f"❌ Full traceback: {traceback.format_exc()}")
+        logging.error(f"❌ Full traceback: {traceback.format_exc()}") 
 
 def process_url_single(detail_url, idx=None, total=None):
     """Process a single URL and write the result to the database."""
@@ -527,9 +528,43 @@ def crawl_kvd(startAuctionCrawlCount=None, endAuctionCrawlCount=None):
         logging.error(f"❌ Error in crawl_kvd: {str(e)}")
         return {"status": "error", "error": str(e)}
 
+# Flask app for Cloud Run (HTTP requests)
+app = Flask(__name__)
+
+@app.route('/', methods=['GET', 'POST'])
+def handle_request():
+    """Cloud Run entry point for HTTP requests."""
+    if request.method == 'GET':
+        return jsonify({
+            "status": "healthy",
+            "message": "Car crawler service is running. Use POST to trigger the crawler.",
+            "usage": "Send a POST request with 'startAuctionCrawlCount' and 'endAuctionCrawlCount' in JSON body (1-based inclusive)"
+        }), 200
+
+    try:
+        # Get the range from the request if provided
+        request_json = request.get_json(silent=True)
+        start_count = request_json.get('startAuctionCrawlCount') if request_json else None
+        end_count = request_json.get('endAuctionCrawlCount') if request_json else None
+        
+        # Run the crawler
+        result = crawl_kvd(startAuctionCrawlCount=start_count, endAuctionCrawlCount=end_count)
+        
+        return jsonify(result), 200
+    except Exception as e:
+        logging.error(f"❌ Error in main function: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run car auction crawler in batch mode.')
-    parser.add_argument('--startAuctionCrawlCount', type=int, default=None, help='Start index (1-based, inclusive)')
-    parser.add_argument('--endAuctionCrawlCount', type=int, default=None, help='End index (1-based, inclusive)')
-    args = parser.parse_args()
-    crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount) 
+    # Check if running as a web service (Cloud Run) or command line (local/batch)
+    import sys
+    if len(sys.argv) > 1:
+        # Command line mode (for local testing or Cloud Batch/Cloud Run Jobs)
+        parser = argparse.ArgumentParser(description='Run car auction crawler in batch mode.')
+        parser.add_argument('--startAuctionCrawlCount', type=int, default=None, help='Start index (1-based, inclusive)')
+        parser.add_argument('--endAuctionCrawlCount', type=int, default=None, help='End index (1-based, inclusive)')
+        args = parser.parse_args()
+        crawl_kvd(startAuctionCrawlCount=args.startAuctionCrawlCount, endAuctionCrawlCount=args.endAuctionCrawlCount)
+    else:
+        # Web service mode (for Cloud Run HTTP requests)
+        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080))) 

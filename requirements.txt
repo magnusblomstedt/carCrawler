@@ -2,4 +2,6 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 pg8000==1.30.5
 psutil==5.9.8
-google-cloud-logging==3.10.0 
+google-cloud-logging==3.10.0
+flask==3.0.2
+gunicorn==21.2.0 
